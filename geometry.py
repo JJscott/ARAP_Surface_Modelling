@@ -19,25 +19,33 @@ def _flatten_list(l):
 
 
 class Geometry(object):
-	geo_shader = GLuint(0)
+	solid_shader = GLuint(0)
 	wire_shader = GLuint(0)
+	flat_shader = GLuint(0)
 
 	def __init__(self, gl, v=[], vtf=[], f=[]):
-		if not Geometry.geo_shader:
-			Geometry.geo_shader = makeProgram(gl, "330 core", [GL_VERTEX_SHADER, GL_GEOMETRY_SHADER, GL_FRAGMENT_SHADER],
-				open("shaders/default_shader.glsl").read())
+		if not Geometry.solid_shader:
+			Geometry.solid_shader = makeProgram(gl, "330 core", [GL_VERTEX_SHADER, GL_GEOMETRY_SHADER, GL_FRAGMENT_SHADER],
+				open("shaders/solid_shader.glsl").read())
 
 		if not Geometry.wire_shader:
 			Geometry.wire_shader = makeProgram(gl, "330 core", [GL_VERTEX_SHADER, GL_GEOMETRY_SHADER, GL_FRAGMENT_SHADER],
 				open("shaders/wireframe_shader.glsl").read())
+
+		if not Geometry.flat_shader:
+			Geometry.flat_shader = makeProgram(gl, "330 core", [GL_VERTEX_SHADER, GL_FRAGMENT_SHADER],
+				open("shaders/flat_color_shader.glsl").read())
 
 
 
 		self.verts = v
 		self.vertToFaces = vtf
 		self.faces = f
+		self.selected = []
+		self.constrained = []
 
-		# Creating the VAO and VBO(s)
+
+		# Creating the VAO and VBO(s) for mesh
 		# 
 		self.vao = GLuint(0)
 		gl.glGenVertexArrays(1, self.vao)
@@ -47,7 +55,6 @@ class Geometry(object):
 		idx_array = pygloo.c_array(GLuint, _flatten_list(self.faces))
 		self.ibo = GLuint(0)
 		self.ibo_size = len(idx_array)
-		# print "ibo ", self.ibo_size
 		gl.glGenBuffers(1, self.ibo)
 		gl.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self.ibo);
 		gl.glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(idx_array), idx_array, GL_STATIC_DRAW);
@@ -55,11 +62,39 @@ class Geometry(object):
 		# Vertex Position VBO
 		self.vbo_pos = GLuint(0)
 		gl.glGenBuffers(1, self.vbo_pos)
+		gl.glBindVertexArray(0)
 
+
+
+		# Creating the VAO(s) for selected/constrained points
+		#
+
+		# Selected
+		self.vao_selected = GLuint(0)
+		gl.glGenVertexArrays(1, self.vao_selected)
+		gl.glBindVertexArray(self.vao_selected)
+
+		self.ibo_selected = GLuint(0)
+		gl.glGenBuffers(1, self.ibo_selected)
+
+		# Constrained
+		self.vao_constrained = GLuint(0)
+		gl.glGenVertexArrays(1, self.vao_constrained)
+		gl.glBindVertexArray(self.vao_constrained)
+
+		self.ibo_constrained = GLuint(0)
+		gl.glGenBuffers(1, self.ibo_constrained)
+
+
+
+		# Make the update
 		self.update(gl)
 
 
 
+	# Because we are going to be changing the positions of the verticies alot
+	# as well as the selected/constrained points, this is a helper method that
+	# is run occasionally
 	def update(self, gl):
 		
 		# Update vertex position information
@@ -73,9 +108,32 @@ class Geometry(object):
 		gl.glEnableVertexAttribArray(0)
 		gl.glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0)
 
+
+		# Update Selected/Constrained information
+		# 
+		gl.glBindVertexArray(self.vao_selected)
+		idx_array = pygloo.c_array(GLuint, self.selected)
+		gl.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self.ibo_selected);
+		gl.glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(idx_array), idx_array, GL_STREAM_DRAW);
+
+		gl.glBindBuffer(GL_ARRAY_BUFFER, self.vbo_pos)
+		gl.glEnableVertexAttribArray(0)
+		gl.glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0)
+
+
+		gl.glBindVertexArray(self.vao_constrained)
+		idx_array = pygloo.c_array(GLuint, self.constrained)
+		gl.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self.ibo_constrained);
+		gl.glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(idx_array), idx_array, GL_STREAM_DRAW);
+
+		gl.glBindBuffer(GL_ARRAY_BUFFER, self.vbo_pos)
+		gl.glEnableVertexAttribArray(0)
+		gl.glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0)
+
 		# Cleanup
-		gl.glBindBuffer(GL_ARRAY_BUFFER, 0)
 		gl.glBindVertexArray(0)
+
+
 
 
 
@@ -83,13 +141,13 @@ class Geometry(object):
 
 	def render(self, gl, mv, proj, wireframe=False):
 
-		# Render
+		# Render Model
 		# 
-		gl.glUseProgram(Geometry.geo_shader)
+		gl.glUseProgram(Geometry.solid_shader)
 		gl.glBindVertexArray(self.vao)
 		
-		gl.glUniformMatrix4fv(gl.glGetUniformLocation(Geometry.geo_shader, "modelViewMatrix"), 1, True, pygloo.c_array(GLfloat, _flatten_list(mv)))
-		gl.glUniformMatrix4fv(gl.glGetUniformLocation(Geometry.geo_shader, "projectionMatrix"), 1, True, pygloo.c_array(GLfloat, _flatten_list(proj)))
+		gl.glUniformMatrix4fv(gl.glGetUniformLocation(Geometry.solid_shader, "modelViewMatrix"), 1, True, pygloo.c_array(GLfloat, _flatten_list(mv)))
+		gl.glUniformMatrix4fv(gl.glGetUniformLocation(Geometry.solid_shader, "projectionMatrix"), 1, True, pygloo.c_array(GLfloat, _flatten_list(proj)))
 
 		gl.glDrawElements(GL_TRIANGLES, self.ibo_size, GL_UNSIGNED_INT, 0)
 		gl.glBindVertexArray(0)
@@ -110,6 +168,26 @@ class Geometry(object):
 
 
 
+		# Render selected and constrained points
+		#
+		gl.glPointSize(5.0)
+
+		gl.glUseProgram(Geometry.flat_shader)
+		gl.glBindVertexArray(self.vao_selected)
+		gl.glUniform3fv(gl.glGetUniformLocation(Geometry.flat_shader, "color"), 1, pygloo.c_array(GLfloat, [1.0, 1.0, 0.0]))
+
+		
+		gl.glUniformMatrix4fv(gl.glGetUniformLocation(Geometry.flat_shader, "modelViewMatrix"), 1, True, pygloo.c_array(GLfloat, _flatten_list(mv)))
+		gl.glUniformMatrix4fv(gl.glGetUniformLocation(Geometry.flat_shader, "projectionMatrix"), 1, True, pygloo.c_array(GLfloat, _flatten_list(proj)))
+
+		gl.glDrawElements(GL_POINTS, len(self.selected), GL_UNSIGNED_INT, 0)
+
+
+		gl.glBindVertexArray(self.vao_constrained)
+		gl.glUniform3fv(gl.glGetUniformLocation(Geometry.flat_shader, "color"), 1, pygloo.c_array(GLfloat, [1.0, 0.0, 0.0]))
+
+		gl.glDrawElements(GL_POINTS, len(self.constrained), GL_UNSIGNED_INT, 0)
+		gl.glBindVertexArray(0)
 
 
 
